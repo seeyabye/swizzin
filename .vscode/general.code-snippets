@@ -57,8 +57,8 @@
             "\tsystemctl reload nginx",
             "\techo_progress_done \"Nginx configured\"",
             "else",
-            "\techo_info \"${1:application} will be running on port $2\"",
-            "fi",
+            "\techo_info \"${1:application} will be running on port ${2:443}\"",
+            "fi$0",
         ],
         "description": "Adds a source to a swizzin function.\nPrepends the appropriate shellcheck declaration"
     },
@@ -71,7 +71,7 @@
             "if [[ -f /install/.nginx.lock ]]; then",
             "\trm /etc/nginx/apps/${1:app}.conf",
             "\tsystemctl reload nginx",
-            "fi",
+            "fi$0",
         ],
         "description": "Adds a source to a swizzin function.\nPrepends the appropriate shellcheck declaration"
     }
