@@ -44,5 +44,35 @@
             ". /etc/swizzin/sources/functions/${1:util}"
         ],
         "description": "Adds a source to a swizzin function.\nPrepends the appropriate shellcheck declaration"
+    },
+    "nginx install script block": {
+        "scope": "shellscript",
+        "prefix": [
+            "nginx"
+        ],
+        "body": [
+            "if [[ -f /install/.nginx.lock ]]; then",
+            "\techo_progress_start \"Configuring nginx for ${1:app}\"",
+            "\t/etc/swizzin/nginx/${1:app}.sh",
+            "\tsystemctl nginx reload",
+            "\techo_progress_done \"Nginx configured\"",
+            "else",
+            "\techo_info \"${1:application} will be running on port $2\"",
+            "fi",
+        ],
+        "description": "Adds a source to a swizzin function.\nPrepends the appropriate shellcheck declaration"
+    },
+    "nginx reove script block": {
+        "scope": "shellscript",
+        "prefix": [
+            "nginxrm"
+        ],
+        "body": [
+            "if [[ -f /install/.nginx.lock ]]; then",
+            "\trm /etc/nginx/apps/${1:app}.conf",
+            "\tsystemctl nginx reload",
+            "fi",
+        ],
+        "description": "Adds a source to a swizzin function.\nPrepends the appropriate shellcheck declaration"
     }
 }
