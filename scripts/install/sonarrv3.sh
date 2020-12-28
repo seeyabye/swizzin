@@ -122,8 +122,8 @@ _add_sonarr_repos() {
     echo "deb https://apt.sonarr.tv/${distribution,,} ${codename,,} main" | tee /etc/apt/sources.list.d/sonarr.list >> $log 2>&1
 
     #shellcheck source=sources/functions/mono
-    . /etc/swizzin/sources/functions/mono
-    mono_repo_setup
+    # . /etc/swizzin/sources/functions/mono
+    # mono_repo_setup
 
     apt_update
 
