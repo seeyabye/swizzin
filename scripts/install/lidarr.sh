@@ -19,7 +19,9 @@ apt_install libmono-cil-dev libchromaprint-tools
 
 echo_progress_start "Downloading Lidarr release and extracting"
 cd /home/${user}/
-wget -O lidarr.tar.gz -q $(curl -s https://api.github.com/repos/Lidarr/Lidarr/releases | grep linux.tar.gz | grep browser_download_url | head -1 | cut -d \" -f 4)
+
+dlurl="$(curl -s https://api.github.com/repos/Lidarr/Lidarr/releases | grep linux.tar.gz | grep browser_download_url | head -1 | cut -d \" -f 4)"
+wget -O lidarr.tar.gz -q "$dlurl"
 tar xf lidarr.tar.gz
 rm -rf lidarr.tar.gz
 chown -R ${user}: /home/${user}/Lidarr
