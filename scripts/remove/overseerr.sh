@@ -9,6 +9,7 @@ userdel -rf overseerr >> "$log" 2>&1
 
 if [ -f /install/.nginx.lock ]; then
     rm /etc/nginx/apps/overseerr.conf
+    systemctl reload nginx
 fi
 
 rm /install/.overseerr.lock

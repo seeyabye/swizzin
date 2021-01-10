@@ -6,10 +6,9 @@ location /overseerr/ {
 }
 EOF
 
-cat > /opt/overseerr/env.conf << EOF
-
+cat >> /opt/overseerr/env.conf << EOF
 # specify on which interface to listen, by default overseerr listens on all interfaces
-HOST=127.0.0.1
+# HOST=127.0.0.1
 EOF
 
 systemctl try-restart overseerr
