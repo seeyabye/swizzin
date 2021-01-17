@@ -8,7 +8,10 @@ overseerr_install() {
         exit 1
     }
     mkdir -p /opt/overseerr
-    tar --strip-components=1 -C /opt/overseerr -xzvf /tmp/overseerr.tar.gz >> "$log" 2>&1
+    tar --strip-components=1 -C /opt/overseerr -xzvf /tmp/overseerr.tar.gz >> "$log" 2>&1 || {
+        echo_error "Failed to extract archive"
+        exit 1
+    }
     echo_progress_done "Code extracted"
 
     # Changing baseurl before build
@@ -27,7 +30,7 @@ overseerr_install() {
 
     echo_progress_start "Building overseerr"
     yarn --cwd /opt/overseerr build >> "$log" 2>&1 || {
-        echo_error "Failed to build overseerr sqlite"
+        echo_error "Failed to build overseerr"
         exit 1
     }
     echo_progress_done "Succesfully built"
