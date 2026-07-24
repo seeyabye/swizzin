@@ -80,6 +80,24 @@ fi
 echo_progress_done
 
 # Checking nginx existence is the first thing that happens in the script
+# SSO hook: pin dashboard fork if Authelia is installed
+if [[ -f /install/.authelia.lock ]] && [[ -d /opt/swizzin/.git ]]; then
+    echo_progress_start "Pinning dashboard fork for SSO"
+    DASHBOARD_COMMIT="6ae3df5"
+    cd /opt/swizzin
+    if ! git remote get-url fork 2>/dev/null | grep -q seeyabye; then
+        git remote add fork https://github.com/seeyabye/swizzin_dashboard.git 2>/dev/null || true
+    fi
+    git fetch fork 2>/dev/null
+    if ! git checkout "${DASHBOARD_COMMIT}" 2>/dev/null; then
+        echo_error "Failed to pin dashboard fork to ${DASHBOARD_COMMIT}. Panel SSO will not work."
+    else
+        chown -R swizzin:swizzin /opt/swizzin
+        echo_progress_done "panel pinned to ${DASHBOARD_COMMIT}"
+    fi
+    cd -
+fi
+
 echo_progress_start "Configuring nginx"
 bash /usr/local/bin/swizzin/nginx/panel.sh
 systemctl reload nginx
