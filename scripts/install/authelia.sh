@@ -311,4 +311,4 @@ done
 
 echo_success "Authelia installed (portal at /auth/, SSO active)"
 echo_info "SSO integrated with qBittorrent/ruTorrent/panel"
-echo_info "2FA disabled by default (one_factor). To enable: configure SMTP notifier, change to two_factor, set up TOTP."
+echo_info "2FA disabled by default (one_factor). To enable: configure a notifier, change to two_factor, enroll TOTP."
