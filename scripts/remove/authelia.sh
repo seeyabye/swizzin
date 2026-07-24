@@ -21,17 +21,35 @@ rm -f /install/.authelia.lock
 
 # STEP 3: Regenerate app nginx configs (non-SSO branch, since no lock)
 echo_progress_start "Regenerating app nginx configs (back to auth_basic)"
+regen_failed=0
 if [[ -f /etc/nginx/apps/qbittorrent.conf ]]; then
     rm -f /etc/nginx/apps/qbittorrent.conf
-    bash /etc/swizzin/scripts/nginx/qbittorrent.sh >> ${log} 2>&1
+    if ! bash /etc/swizzin/scripts/nginx/qbittorrent.sh >> ${log} 2>&1; then
+        echo_error "Failed to regenerate qbittorrent nginx config"
+        regen_failed=1
+    fi
 fi
 if [[ -f /etc/nginx/apps/rutorrent.conf ]]; then
     rm -f /etc/nginx/apps/rutorrent.conf
-    bash /etc/swizzin/scripts/nginx/rutorrent.sh >> ${log} 2>&1
+    if ! bash /etc/swizzin/scripts/nginx/rutorrent.sh >> ${log} 2>&1; then
+        echo_error "Failed to regenerate rutorrent nginx config"
+        regen_failed=1
+    fi
 fi
 if [[ -f /etc/nginx/apps/panel.conf ]]; then
     rm -f /etc/nginx/apps/panel.conf
-    bash /etc/swizzin/scripts/nginx/panel.sh >> ${log} 2>&1
+    if ! bash /etc/swizzin/scripts/nginx/panel.sh >> ${log} 2>&1; then
+        echo_error "Failed to regenerate panel nginx config"
+        regen_failed=1
+    fi
+fi
+if [[ $regen_failed -eq 1 ]]; then
+    echo_error "SSO config regeneration failed. Restoring configs and lock. Authelia left running."
+    for app in qbittorrent rutorrent panel; do
+        cp /etc/nginx/apps/${app}.conf.bak-sso-remove /etc/nginx/apps/${app}.conf 2>/dev/null
+    done
+    touch /install/.authelia.lock
+    exit 1
 fi
 
 # STEP 4: Test nginx config before committing
@@ -43,7 +61,14 @@ if ! nginx -t 2>&1; then
     touch /install/.authelia.lock
     exit 1
 fi
-systemctl reload nginx
+if ! systemctl reload nginx; then
+    echo_error "nginx reload failed. Restoring configs and lock. Authelia left running."
+    for app in qbittorrent rutorrent panel; do
+        cp /etc/nginx/apps/${app}.conf.bak-sso-remove /etc/nginx/apps/${app}.conf 2>/dev/null
+    done
+    touch /install/.authelia.lock
+    exit 1
+fi
 echo_progress_done "app nginx configs regenerated"
 
 # STEP 5: Now safe to disable qBittorrent SSO and stop Authelia
@@ -76,6 +101,13 @@ rm -f /etc/nginx/conf.d/00-authelia-map.conf
 rm -f /etc/nginx/apps/authelia.conf
 rm -rf /etc/nginx/auth-secure
 systemctl daemon-reload
+# Final nginx test + reload after removing authelia configs
+if ! nginx -t 2>&1; then
+    echo_error "nginx config test failed after removing Authelia configs."
+    echo_warn "Check /etc/nginx/apps/ for stale references."
+else
+    systemctl reload nginx
+fi
 echo_progress_done "files removed"
 
 echo_progress_start "Reverting panel dashboard"
