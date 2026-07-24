@@ -185,6 +185,21 @@ if [[ -f /install/.panel.lock ]] && [[ -d /opt/swizzin/.git ]]; then
     fi
 fi
 
+
+
+echo_progress_start "Starting Authelia"
+systemctl enable -q authelia.service
+systemctl start authelia.service
+sleep 3
+if ! systemctl is-active -q authelia.service; then
+    echo_error "Authelia failed to start. Check: journalctl -u authelia.service"
+    exit 1
+fi
+echo_progress_done "Authelia started"
+
+# Create lock BEFORE regenerating app configs so templates detect SSO
+touch /install/.authelia.lock
+
 echo_progress_start "Regenerating app nginx configs for SSO"
 if [[ -f /install/.qbittorrent.lock ]]; then
     rm -f /etc/nginx/apps/qbittorrent.conf
@@ -201,16 +216,3 @@ fi
 nginx -t 2>&1 | grep -v ssl_stapling | tail -2
 systemctl reload nginx
 echo_progress_done "app nginx configs regenerated"
-
-echo_progress_start "Starting Authelia"
-systemctl enable -q authelia.service
-systemctl start authelia.service
-sleep 3
-if ! systemctl is-active -q authelia.service; then
-    echo_error "Authelia failed to start. Check: journalctl -u authelia.service"
-    exit 1
-fi
-echo_progress_done "Authelia started"
-
-# Create lock BEFORE regenerating app configs so templates detect SSO
-touch /install/.authelia.lock
