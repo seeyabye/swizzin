@@ -152,6 +152,51 @@ echo_progress_start "Configuring nginx"
 bash /etc/swizzin/scripts/nginx/authelia.sh
 echo_progress_done "nginx configured"
 
+echo_progress_start "Configuring qBittorrent for single-login SSO"
+if [[ -f /install/.qbittorrent.lock ]]; then
+    username="$(_get_master_username)"
+    QBT_CFG="/home/${username}/.config/qBittorrent/qBittorrent.conf"
+    if [[ -f "$QBT_CFG" ]]; then
+        systemctl stop qbittorrent@${username} 2>/dev/null
+        sed -i 's/WebUI\\AuthSubnetWhitelistEnabled=false/WebUI\\AuthSubnetWhitelistEnabled=true/' "$QBT_CFG"
+        if ! grep -q '^WebUI\\AuthSubnetWhitelist=' "$QBT_CFG"; then
+            sed -i '/WebUI\\AuthSubnetWhitelistEnabled/a WebUI\\AuthSubnetWhitelist=127.0.0.1/32' "$QBT_CFG"
+        fi
+        systemctl start qbittorrent@${username}
+        echo_progress_done "qBittorrent configured for single-login"
+    fi
+fi
+
+echo_progress_start "Patching panel for SSO (dashboard fork)"
+if [[ -f /install/.panel.lock ]] && [[ -d /opt/swizzin/.git ]]; then
+    cd /opt/swizzin
+    if ! git remote get-url fork 2>/dev/null | grep -q seeyabye; then
+        git remote add fork https://github.com/seeyabye/swizzin_dashboard.git 2>/dev/null || true
+    fi
+    git fetch fork 2>/dev/null
+    git checkout private 2>/dev/null
+    git pull fork private 2>/dev/null
+    systemctl restart panel.service 2>/dev/null
+    echo_progress_done "panel patched for SSO"
+fi
+
+echo_progress_start "Regenerating app nginx configs for SSO"
+if [[ -f /install/.qbittorrent.lock ]]; then
+    rm -f /etc/nginx/apps/qbittorrent.conf
+    bash /etc/swizzin/scripts/nginx/qbittorrent.sh 2>/dev/null
+fi
+if [[ -f /install/.rutorrent.lock ]]; then
+    rm -f /etc/nginx/apps/rutorrent.conf
+    bash /etc/swizzin/scripts/nginx/rutorrent.sh 2>/dev/null
+fi
+if [[ -f /install/.panel.lock ]]; then
+    rm -f /etc/nginx/apps/panel.conf
+    bash /etc/swizzin/scripts/nginx/panel.sh 2>/dev/null
+fi
+nginx -t 2>&1 | grep -v ssl_stapling | tail -2
+systemctl reload nginx
+echo_progress_done "app nginx configs regenerated"
+
 echo_progress_start "Starting Authelia"
 systemctl enable -q authelia.service
 systemctl start authelia.service
