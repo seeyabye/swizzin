@@ -3,9 +3,6 @@
 # nginx config for Authelia SSO (portal + auth_request endpoint + map)
 #
 
-users=($(cut -d: -f1 < /etc/htpasswd))
-
-cat > /etc/nginx/conf.d/00-authelia-map.conf << AUTHELIAMAP
 # Authelia: translate authenticated user into routing tenant
 map \$authelia_user \$qbt_tenant {
     default "_deny";

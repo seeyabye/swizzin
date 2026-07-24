@@ -82,7 +82,9 @@ notifier:
   filesystem:
     filename: ${AUTHELIA_STATE_DIR}/notification.log
 
-jwt_secret: '${JWT_SECRET}'
+identity_validation:
+  reset_password:
+    jwt_secret: '${JWT_SECRET}'
 AUTHELIACFG
 chmod 640 "${AUTHELIA_CONF_DIR}/configuration.yml"
 chown root:authelia "${AUTHELIA_CONF_DIR}/configuration.yml"
@@ -94,7 +96,7 @@ echo "users:" > "${AUTHELIA_CONF_DIR}/users.yml"
 for user in "${users[@]}"; do
     password="$(_get_user_password "${user}")"
     if [[ -n "$password" ]]; then
-        hash=$(echo -n "${password}" | ${AUTHELIA_BIN} crypto hash generate argon2 --no-confirm 2>/dev/null) || {
+        hash=$(${AUTHELIA_BIN} crypto hash generate argon2 --password "${password}" --no-confirm 2>/dev/null | sed 's/^Digest: //') || {
             echo_warn "Could not hash password for ${user} (will need manual reset)"
             hash="PLACEHOLDER"
         }
