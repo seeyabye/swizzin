@@ -6,7 +6,7 @@
 
 cat > /etc/nginx/apps/authelia.conf << AUTHELIANGINX
 location /auth/ {
-    proxy_pass http://127.0.0.1:9091/;
+    proxy_pass http://127.0.0.1:9091;
     proxy_set_header Host \$host;
     proxy_set_header X-Real-IP \$remote_addr;
     proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
@@ -17,7 +17,7 @@ location /auth/ {
 
 location = /_authz {
     internal;
-    proxy_pass http://127.0.0.1:9091/api/authz/auth-request;
+    proxy_pass http://127.0.0.1:9091/auth/api/authz/auth-request;
     proxy_pass_request_body off;
     proxy_set_header Content-Length "";
     proxy_set_header X-Original-URL \$scheme://\$http_host\$request_uri;

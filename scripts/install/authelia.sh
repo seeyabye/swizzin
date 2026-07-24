@@ -45,7 +45,7 @@ echo_progress_done "secrets generated"
 echo_progress_start "Configuring Authelia"
 cat > "${AUTHELIA_CONF_DIR}/configuration.yml" << AUTHELIACFG
 server:
-  address: 'tcp://127.0.0.1:${AUTHELIA_PORT}'
+  address: 'tcp://127.0.0.1:${AUTHELIA_PORT}/auth'
 
 totp:
   issuer: eu02.nanohosting.info
