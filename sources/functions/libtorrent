@@ -108,11 +108,8 @@ function check_shared_libtorrent_rasterbar() {
 }
 
 function whiptail_skip_libtorrent_rasterbar() {
-    if (whiptail --title "Skip Libtorrent?" --yesno "Setup has determined that you can skip compiling/reinstalling libtorrent. Do you want to?" 12 50); then
-        true
-    else
-        false
-    fi
+    # Patched: auto-skip libtorrent recompile when already compatible (non-interactive)
+    return 0
 }
 
 function cleanup_repo_libtorrent() {
