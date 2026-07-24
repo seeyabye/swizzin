@@ -99,6 +99,7 @@ if [[ -f /install/.qbittorrent.lock ]]; then
         if [[ -f "$QBT_CFG" ]]; then
             systemctl stop qbittorrent@${qbt_user} 2>/dev/null
             sed -i 's/WebUI\\AuthSubnetWhitelistEnabled=true/WebUI\\AuthSubnetWhitelistEnabled=false/' "$QBT_CFG"
+            sed -i 's/WebUI\\Address=*/WebUI\\Address=127.0.0.1/' "$QBT_CFG"
             systemctl start qbittorrent@${qbt_user}
         fi
     done
