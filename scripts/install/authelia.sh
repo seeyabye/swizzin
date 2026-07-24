@@ -154,30 +154,35 @@ echo_progress_done "nginx configured"
 
 echo_progress_start "Configuring qBittorrent for single-login SSO"
 if [[ -f /install/.qbittorrent.lock ]]; then
-    username="$(_get_master_username)"
-    QBT_CFG="/home/${username}/.config/qBittorrent/qBittorrent.conf"
-    if [[ -f "$QBT_CFG" ]]; then
-        systemctl stop qbittorrent@${username} 2>/dev/null
-        sed -i 's/WebUI\\AuthSubnetWhitelistEnabled=false/WebUI\\AuthSubnetWhitelistEnabled=true/' "$QBT_CFG"
-        if ! grep -q '^WebUI\\AuthSubnetWhitelist=' "$QBT_CFG"; then
-            sed -i '/WebUI\\AuthSubnetWhitelistEnabled/a WebUI\\AuthSubnetWhitelist=127.0.0.1/32' "$QBT_CFG"
+    qbt_users=($(_get_user_list))
+    for qbt_user in "${qbt_users[@]}"; do
+        QBT_CFG="/home/${qbt_user}/.config/qBittorrent/qBittorrent.conf"
+        if [[ -f "$QBT_CFG" ]]; then
+            systemctl stop qbittorrent@${qbt_user} 2>/dev/null
+            sed -i 's/WebUI\\AuthSubnetWhitelistEnabled=false/WebUI\\AuthSubnetWhitelistEnabled=true/' "$QBT_CFG"
+            if ! grep -q '^WebUI\\AuthSubnetWhitelist=' "$QBT_CFG"; then
+                sed -i '/WebUI\\AuthSubnetWhitelistEnabled/a WebUI\\AuthSubnetWhitelist=127.0.0.1/32' "$QBT_CFG"
+            fi
+            systemctl start qbittorrent@${qbt_user}
         fi
-        systemctl start qbittorrent@${username}
-        echo_progress_done "qBittorrent configured for single-login"
-    fi
+    done
+    echo_progress_done "qBittorrent configured for single-login"
 fi
 
 echo_progress_start "Patching panel for SSO (dashboard fork)"
+DASHBOARD_COMMIT="6ae3df5"
 if [[ -f /install/.panel.lock ]] && [[ -d /opt/swizzin/.git ]]; then
     cd /opt/swizzin
     if ! git remote get-url fork 2>/dev/null | grep -q seeyabye; then
         git remote add fork https://github.com/seeyabye/swizzin_dashboard.git 2>/dev/null || true
     fi
     git fetch fork 2>/dev/null
-    git checkout private 2>/dev/null
-    git pull fork private 2>/dev/null
-    systemctl restart panel.service 2>/dev/null
-    echo_progress_done "panel patched for SSO"
+    if ! git checkout "${DASHBOARD_COMMIT}" 2>/dev/null; then
+        echo_error "Failed to pin dashboard fork to ${DASHBOARD_COMMIT}. Panel SSO will not work."
+    else
+        systemctl restart panel.service 2>/dev/null
+        echo_progress_done "panel pinned to ${DASHBOARD_COMMIT}"
+    fi
 fi
 
 echo_progress_start "Regenerating app nginx configs for SSO"
@@ -207,6 +212,5 @@ if ! systemctl is-active -q authelia.service; then
 fi
 echo_progress_done "Authelia started"
 
+# Create lock BEFORE regenerating app configs so templates detect SSO
 touch /install/.authelia.lock
-echo_success "Authelia installed (portal at /auth/, MFA required)"
-echo_info "Next: Phase 3 will integrate qBittorrent/ruTorrent/panel with Authelia auth_request"
