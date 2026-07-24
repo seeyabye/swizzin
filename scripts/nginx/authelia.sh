@@ -66,5 +66,7 @@ location @authelia_redirect {
 }
 AUTHELIANGINX
 
-nginx -t 2>&1 | grep -vE 'ssl_stapling' | tail -2
-systemctl reload nginx
+# Note: nginx -t + reload is handled by the install transaction,
+# not here. Running it now would fail if SSO app configs don't exist yet
+# (the map references $authelia_user which is only defined by auth_request_set
+# in app configs). The install script's transaction does the final test + reload.
