@@ -53,7 +53,28 @@ case ${PYENV} in
 esac
 
 echo_progress_start "Cloning panel"
-git clone https://github.com/liaralabs/swizzin_dashboard.git /opt/swizzin >> ${log} 2>&1
+if [[ -f /install/.authelia.lock ]]; then
+    # SSO: use seeyabye fork with X-Forwarded-User + shared secret support
+    DASHBOARD_COMMIT="6ae3df5"
+    git clone https://github.com/seeyabye/swizzin_dashboard.git /opt/swizzin >> ${log} 2>&1
+    if [[ $? -ne 0 ]]; then
+        echo_error "Failed to clone panel fork"
+        exit 1
+    fi
+    cd /opt/swizzin
+    if ! git checkout "${DASHBOARD_COMMIT}" >> ${log} 2>&1; then
+        echo_error "Failed to pin dashboard to ${DASHBOARD_COMMIT}. Aborting."
+        rm -rf /opt/swizzin
+        exit 1
+    fi
+    cd -
+else
+    git clone https://github.com/liaralabs/swizzin_dashboard.git /opt/swizzin >> ${log} 2>&1
+    if [[ $? -ne 0 ]]; then
+        echo_error "Failed to clone panel"
+        exit 1
+    fi
+fi
 echo_progress_done "Panel cloned"
 
 echo_progress_start "Installing python dependencies"
