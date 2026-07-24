@@ -1,32 +1,52 @@
 #!/usr/bin/env bash
 #
 # Authelia removal for swizzin
-# Reverts SSO integration: regenerates app configs back to auth_basic
+# Transaction: back up → generate non-SSO → test → only then delete Authelia
 #
 
 #shellcheck source=sources/functions/utils
 . /etc/swizzin/sources/functions/utils
 
-echo_progress_start "Stopping Authelia"
-systemctl stop -q authelia.service 2>/dev/null
-systemctl disable -q authelia.service 2>/dev/null
-echo_progress_done "Authelia stopped"
+# STEP 1: Back up existing app configs (before any changes)
+echo_progress_start "Backing up app nginx configs"
+for app in qbittorrent rutorrent panel; do
+    if [[ -f /etc/nginx/apps/${app}.conf ]]; then
+        cp /etc/nginx/apps/${app}.conf /etc/nginx/apps/${app}.conf.bak-sso-remove
+    fi
+done
+echo_progress_done "backups created"
 
-echo_progress_start "Removing Authelia files"
-rm -f /etc/systemd/system/authelia.service
-rm -f /usr/local/bin/authelia
-rm -rf /etc/authelia
-rm -rf /var/lib/authelia
-rm -rf /var/lib/swizzin-panel
-rm -f /etc/nginx/conf.d/00-authelia-map.conf
-rm -f /etc/nginx/apps/authelia.conf
-rm -rf /etc/nginx/auth-secure
-systemctl daemon-reload
-echo_progress_done "files removed"
-
-# Remove lock BEFORE regenerating configs so templates take non-SSO branch
+# STEP 2: Temporarily remove lock so templates generate non-SSO configs
 rm -f /install/.authelia.lock
 
+# STEP 3: Regenerate app nginx configs (non-SSO branch, since no lock)
+echo_progress_start "Regenerating app nginx configs (back to auth_basic)"
+if [[ -f /etc/nginx/apps/qbittorrent.conf ]]; then
+    rm -f /etc/nginx/apps/qbittorrent.conf
+    bash /etc/swizzin/scripts/nginx/qbittorrent.sh >> ${log} 2>&1
+fi
+if [[ -f /etc/nginx/apps/rutorrent.conf ]]; then
+    rm -f /etc/nginx/apps/rutorrent.conf
+    bash /etc/swizzin/scripts/nginx/rutorrent.sh >> ${log} 2>&1
+fi
+if [[ -f /etc/nginx/apps/panel.conf ]]; then
+    rm -f /etc/nginx/apps/panel.conf
+    bash /etc/swizzin/scripts/nginx/panel.sh >> ${log} 2>&1
+fi
+
+# STEP 4: Test nginx config before committing
+if ! nginx -t 2>&1; then
+    echo_error "nginx config test failed. Restoring configs and lock. Authelia left running."
+    for app in qbittorrent rutorrent panel; do
+        cp /etc/nginx/apps/${app}.conf.bak-sso-remove /etc/nginx/apps/${app}.conf 2>/dev/null
+    done
+    touch /install/.authelia.lock
+    exit 1
+fi
+systemctl reload nginx
+echo_progress_done "app nginx configs regenerated"
+
+# STEP 5: Now safe to disable qBittorrent SSO and stop Authelia
 echo_progress_start "Reverting qBittorrent SSO config"
 if [[ -f /install/.qbittorrent.lock ]]; then
     qbt_users=($(_get_user_list))
@@ -41,45 +61,36 @@ if [[ -f /install/.qbittorrent.lock ]]; then
 fi
 echo_progress_done "qBittorrent SSO reverted"
 
-echo_progress_start "Regenerating app nginx configs (back to auth_basic)"
-# Back up existing configs, regenerate (templates will use auth_basic since no authelia.lock)
-if [[ -f /etc/nginx/apps/qbittorrent.conf ]]; then
-    cp /etc/nginx/apps/qbittorrent.conf /etc/nginx/apps/qbittorrent.conf.bak-sso-remove
-    rm -f /etc/nginx/apps/qbittorrent.conf
-    bash /etc/swizzin/scripts/nginx/qbittorrent.sh >> ${log} 2>&1
-fi
-if [[ -f /etc/nginx/apps/rutorrent.conf ]]; then
-    cp /etc/nginx/apps/rutorrent.conf /etc/nginx/apps/rutorrent.conf.bak-sso-remove
-    rm -f /etc/nginx/apps/rutorrent.conf
-    bash /etc/swizzin/scripts/nginx/rutorrent.sh >> ${log} 2>&1
-fi
-if [[ -f /etc/nginx/apps/panel.conf ]]; then
-    cp /etc/nginx/apps/panel.conf /etc/nginx/apps/panel.conf.bak-sso-remove
-    rm -f /etc/nginx/apps/panel.conf
-    bash /etc/swizzin/scripts/nginx/panel.sh >> ${log} 2>&1
-fi
+echo_progress_start "Stopping Authelia"
+systemctl stop -q authelia.service 2>/dev/null
+systemctl disable -q authelia.service 2>/dev/null
+echo_progress_done "Authelia stopped"
 
-if ! nginx -t 2>&1; then
-    echo_error "nginx config test failed after SSO removal. Restoring backups."
-    for app in qbittorrent rutorrent panel; do
-        cp /etc/nginx/apps/${app}.conf.bak-sso-remove /etc/nginx/apps/${app}.conf 2>/dev/null
-    done
-    exit 1
-fi
-systemctl reload nginx
-echo_progress_done "app nginx configs regenerated"
+echo_progress_start "Removing Authelia files"
+rm -f /etc/systemd/system/authelia.service
+rm -f /usr/local/bin/authelia
+rm -rf /etc/authelia
+rm -rf /var/lib/authelia
+rm -f /var/lib/swizzin-panel/panel-secret
+rm -f /etc/nginx/conf.d/00-authelia-map.conf
+rm -f /etc/nginx/apps/authelia.conf
+rm -rf /etc/nginx/auth-secure
+systemctl daemon-reload
+echo_progress_done "files removed"
 
-echo_progress_start "Reverting panel dashboard to upstream"
+echo_progress_start "Reverting panel dashboard"
 if [[ -f /install/.panel.lock ]] && [[ -d /opt/swizzin/.git ]]; then
     cd /opt/swizzin
     git remote remove fork 2>/dev/null || true
-    git fetch origin 2>/dev/null
+    # Fetch and reset to upstream master (don't assume origin points upstream)
+    git fetch --all 2>/dev/null
     git checkout master 2>/dev/null || true
+    git reset --hard origin/master 2>/dev/null || true
     chown -R swizzin:swizzin /opt/swizzin
     systemctl restart panel.service 2>/dev/null
     cd -
 fi
-echo_progress_done "panel reverted to upstream"
+echo_progress_done "panel reverted"
 
 userdel authelia 2>/dev/null || true
 
