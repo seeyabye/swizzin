@@ -1,14 +1,8 @@
 #!/usr/bin/env bash
 #
-# nginx config for Authelia SSO (portal + auth_request endpoint + map)
+# nginx config for Authelia SSO (portal + auth_request endpoint)
+# The tenant-routing map is created in Phase 3 (when auth_request_set defines $authelia_user)
 #
-
-# Authelia: translate authenticated user into routing tenant
-map \$authelia_user \$qbt_tenant {
-    default "_deny";
-$(for u in "${users[@]}"; do echo "    ${u} ${u};"; done)
-}
-AUTHELIAMAP
 
 cat > /etc/nginx/apps/authelia.conf << AUTHELIANGINX
 location /auth/ {
