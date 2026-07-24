@@ -152,40 +152,10 @@ echo_progress_start "Configuring nginx"
 bash /etc/swizzin/scripts/nginx/authelia.sh
 echo_progress_done "nginx configured"
 
-echo_progress_start "Configuring qBittorrent for single-login SSO"
-if [[ -f /install/.qbittorrent.lock ]]; then
-    qbt_users=($(_get_user_list))
-    for qbt_user in "${qbt_users[@]}"; do
-        QBT_CFG="/home/${qbt_user}/.config/qBittorrent/qBittorrent.conf"
-        if [[ -f "$QBT_CFG" ]]; then
-            systemctl stop qbittorrent@${qbt_user} 2>/dev/null
-            sed -i 's/WebUI\\AuthSubnetWhitelistEnabled=false/WebUI\\AuthSubnetWhitelistEnabled=true/' "$QBT_CFG"
-            if ! grep -q '^WebUI\\AuthSubnetWhitelist=' "$QBT_CFG"; then
-                sed -i '/WebUI\\AuthSubnetWhitelistEnabled/a WebUI\\AuthSubnetWhitelist=127.0.0.1/32' "$QBT_CFG"
-            fi
-            systemctl start qbittorrent@${qbt_user}
-        fi
-    done
-    echo_progress_done "qBittorrent configured for single-login"
-fi
-
-echo_progress_start "Patching panel for SSO (dashboard fork)"
-DASHBOARD_COMMIT="6ae3df5"
-if [[ -f /install/.panel.lock ]] && [[ -d /opt/swizzin/.git ]]; then
-    cd /opt/swizzin
-    if ! git remote get-url fork 2>/dev/null | grep -q seeyabye; then
-        git remote add fork https://github.com/seeyabye/swizzin_dashboard.git 2>/dev/null || true
-    fi
-    git fetch fork 2>/dev/null
-    if ! git checkout "${DASHBOARD_COMMIT}" 2>/dev/null; then
-        echo_error "Failed to pin dashboard fork to ${DASHBOARD_COMMIT}. Panel SSO will not work."
-    else
-        systemctl restart panel.service 2>/dev/null
-        echo_progress_done "panel pinned to ${DASHBOARD_COMMIT}"
-    fi
-fi
-
-
+# === SSO INTEGRATION TRANSACTION ===
+# All mutations (nginx configs, panel code, qBittorrent prefs) are applied
+# as one transaction: back up all → generate → apply → nginx -t → reload.
+# On ANY failure: rollback ALL layers and remove lock.
 
 echo_progress_start "Starting Authelia"
 systemctl enable -q authelia.service
@@ -197,75 +167,147 @@ if ! systemctl is-active -q authelia.service; then
 fi
 echo_progress_done "Authelia started"
 
-# Create lock BEFORE regenerating app configs so templates detect SSO
 touch /install/.authelia.lock
 
-# Trap: remove lock if regeneration fails (rollback SSO signal)
-# SSO integration uses explicit error checks (no ERR trap)
+# --- BACK UP ALL LAYERS ---
+echo_progress_start "Backing up app configs for SSO integration"
+# nginx configs
+for app in qbittorrent rutorrent panel; do
+    [[ -f /etc/nginx/apps/${app}.conf ]] && cp /etc/nginx/apps/${app}.conf /etc/nginx/apps/${app}.conf.bak-sso
+done
+# qBittorrent configs
+qbt_users=($(_get_user_list))
+for u in "${qbt_users[@]}"; do
+    QBT_CFG="/home/${u}/.config/qBittorrent/qBittorrent.conf"
+    [[ -f "$QBT_CFG" ]] && cp "$QBT_CFG" "${QBT_CFG}.bak-sso"
+done
+# Panel code state
+PANEL_PREV_HEAD=""
+if [[ -d /opt/swizzin/.git ]]; then
+    cd /opt/swizzin
+    PANEL_PREV_HEAD=$(git rev-parse HEAD 2>/dev/null)
+    cd -
+fi
+echo_progress_done "backups created"
 
-echo_progress_start "Regenerating app nginx configs for SSO"
-regen_failed=0
-
-# Back up existing configs before modifying
-if [[ -f /etc/nginx/apps/qbittorrent.conf ]]; then cp /etc/nginx/apps/qbittorrent.conf /etc/nginx/apps/qbittorrent.conf.bak-sso; fi
-if [[ -f /etc/nginx/apps/rutorrent.conf ]]; then cp /etc/nginx/apps/rutorrent.conf /etc/nginx/apps/rutorrent.conf.bak-sso; fi
-if [[ -f /etc/nginx/apps/panel.conf ]]; then cp /etc/nginx/apps/panel.conf /etc/nginx/apps/panel.conf.bak-sso; fi
-
-# Restore all backups and abort
-restore_all_backups() {
+# Rollback function: restore ALL layers + remove lock
+cleanup_sso() {
+    echo_error "SSO integration failed. Rolling back all changes."
     for app in qbittorrent rutorrent panel; do
-        if [[ -f /etc/nginx/apps/${app}.conf.bak-sso ]]; then
-            cp /etc/nginx/apps/${app}.conf.bak-sso /etc/nginx/apps/${app}.conf
+        [[ -f /etc/nginx/apps/${app}.conf.bak-sso ]] && cp /etc/nginx/apps/${app}.conf.bak-sso /etc/nginx/apps/${app}.conf
+    done
+    for u in "${qbt_users[@]}"; do
+        QBT_CFG="/home/${u}/.config/QBittorrent/qBittorrent.conf"
+        if [[ -f "${QBT_CFG}.bak-sso" ]]; then
+            systemctl stop qbittorrent@${u} 2>/dev/null
+            cp "${QBT_CFG}.bak-sso" "$QBT_CFG"
+            systemctl start qbittorrent@${u} 2>/dev/null
         fi
     done
+    if [[ -n "${PANEL_PREV_HEAD}" ]] && [[ -d /opt/swizzin/.git ]]; then
+        cd /opt/swizzin
+        git checkout "${PANEL_PREV_HEAD}" 2>/dev/null
+        chown -R swizzin:swizzin /opt/swizzin
+        systemctl restart panel.service 2>/dev/null
+        cd -
+    fi
+    rm -f /install/.authelia.lock
+    nginx -t 2>/dev/null && systemctl reload nginx 2>/dev/null
+    exit 1
 }
 
-# Generate new configs (errors logged, not suppressed)
+# --- GENERATE SSO NGINX CONFIGS (no reload yet) ---
+echo_progress_start "Generating SSO nginx configs"
 if [[ -f /install/.qbittorrent.lock ]] && [[ -f /etc/nginx/apps/qbittorrent.conf ]]; then
     rm -f /etc/nginx/apps/qbittorrent.conf
     if ! bash /etc/swizzin/scripts/nginx/qbittorrent.sh >> ${log} 2>&1; then
-        echo_error "Failed to regenerate qbittorrent nginx config"
-        regen_failed=1
+        echo_error "Failed to generate qbittorrent SSO config"
+        cleanup_sso
     fi
 fi
-
 if [[ -f /install/.rutorrent.lock ]] && [[ -f /etc/nginx/apps/rutorrent.conf ]]; then
     rm -f /etc/nginx/apps/rutorrent.conf
     if ! bash /etc/swizzin/scripts/nginx/rutorrent.sh >> ${log} 2>&1; then
-        echo_error "Failed to regenerate rutorrent nginx config"
-        regen_failed=1
+        echo_error "Failed to generate rutorrent SSO config"
+        cleanup_sso
     fi
 fi
-
 if [[ -f /install/.panel.lock ]] && [[ -f /etc/nginx/apps/panel.conf ]]; then
     rm -f /etc/nginx/apps/panel.conf
     if ! bash /etc/swizzin/scripts/nginx/panel.sh >> ${log} 2>&1; then
-        echo_error "Failed to regenerate panel nginx config"
-        regen_failed=1
+        echo_error "Failed to generate panel SSO config"
+        cleanup_sso
     fi
 fi
+echo_progress_done "SSO nginx configs generated"
 
-# If any generator failed, restore ALL backups and abort
-if [[ $regen_failed -eq 1 ]]; then
-    echo_error "SSO config regeneration failed. Restoring all backups."
-    restore_all_backups
-    rm -f /install/.authelia.lock
-    exit 1
+# --- APPLY PANEL FORK PIN ---
+echo_progress_start "Patching panel for SSO (dashboard fork)"
+DASHBOARD_COMMIT="6ae3df5"
+if [[ -f /install/.panel.lock ]] && [[ -d /opt/swizzin/.git ]]; then
+    cd /opt/swizzin
+    if ! git remote get-url fork 2>/dev/null | grep -q seeyabye; then
+        git remote add fork https://github.com/seeyabye/swizzin_dashboard.git
+    fi
+    if ! git fetch fork >> ${log} 2>&1; then
+        echo_error "Failed to fetch dashboard fork"
+        cleanup_sso
+    fi
+    if ! git checkout "${DASHBOARD_COMMIT}" >> ${log} 2>&1; then
+        echo_error "Failed to pin dashboard to ${DASHBOARD_COMMIT}"
+        cleanup_sso
+    fi
+    chown -R swizzin:swizzin /opt/swizzin
+    if ! systemctl restart panel.service; then
+        echo_error "Panel failed to restart after fork pin"
+        cleanup_sso
+    fi
+    cd -
 fi
+echo_progress_done "panel pinned to ${DASHBOARD_COMMIT}"
 
-# Test nginx config (if-statement doesn't trigger ERR trap)
-if ! nginx_output=$(nginx -t 2>&1); then
-    echo "$nginx_output" | grep -v ssl_stapling
-    echo_error "nginx config test failed. Restoring all backups."
-    restore_all_backups
-    rm -f /install/.authelia.lock
-    exit 1
+# --- APPLY QBITTORRENT WHITELIST ---
+echo_progress_start "Configuring qBittorrent for single-login SSO"
+if [[ -f /install/.qbittorrent.lock ]]; then
+    for qbt_user in "${qbt_users[@]}"; do
+        QBT_CFG="/home/${qbt_user}/.config/qBittorrent/qBittorrent.conf"
+        if [[ -f "$QBT_CFG" ]]; then
+            systemctl stop qbittorrent@${qbt_user} 2>/dev/null
+            if ! sed -i 's/WebUI\\AuthSubnetWhitelistEnabled=false/WebUI\\AuthSubnetWhitelistEnabled=true/' "$QBT_CFG"; then
+                echo_error "Failed to configure whitelist for ${qbt_user}"
+                cleanup_sso
+            fi
+            if ! grep -q '^WebUI\\AuthSubnetWhitelist=' "$QBT_CFG"; then
+                sed -i '/WebUI\\AuthSubnetWhitelistEnabled/a WebUI\\AuthSubnetWhitelist=127.0.0.1/32' "$QBT_CFG"
+            fi
+            if ! systemctl start qbittorrent@${qbt_user}; then
+                echo_error "Failed to restart qBittorrent for ${qbt_user}"
+                cleanup_sso
+            fi
+        fi
+    done
 fi
-echo "$nginx_output" | grep -v ssl_stapling
+echo_progress_done "qBittorrent SSO configured"
 
-systemctl reload nginx
-echo_progress_done "app nginx configs regenerated"
-# (no ERR trap to remove)
+# --- TEST + RELOAD (only after ALL changes applied) ---
+echo_progress_start "Testing nginx config"
+if ! nginx -t 2>&1; then
+    echo_error "nginx config test failed after SSO integration"
+    cleanup_sso
+fi
+if ! systemctl reload nginx; then
+    echo_error "nginx reload failed after SSO integration"
+    cleanup_sso
+fi
+echo_progress_done "nginx reloaded"
+
+# Cleanup backups
+for app in qbittorrent rutorrent panel; do
+    rm -f /etc/nginx/apps/${app}.conf.bak-sso
+done
+for u in "${qbt_users[@]}"; do
+    rm -f "/home/${u}/.config/QBittorrent/qBittorrent.conf.bak-sso"
+done
 
 echo_success "Authelia installed (portal at /auth/, MFA required)"
 echo_info "SSO integrated with qBittorrent/ruTorrent/panel"
