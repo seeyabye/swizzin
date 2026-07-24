@@ -200,6 +200,9 @@ echo_progress_done "Authelia started"
 # Create lock BEFORE regenerating app configs so templates detect SSO
 touch /install/.authelia.lock
 
+# Trap: remove lock if regeneration fails (rollback SSO signal)
+trap 'rm -f /install/.authelia.lock; echo_error "SSO integration failed, lock removed"' ERR
+
 echo_progress_start "Regenerating app nginx configs for SSO"
 if [[ -f /install/.qbittorrent.lock ]]; then
     rm -f /etc/nginx/apps/qbittorrent.conf
@@ -216,3 +219,8 @@ fi
 nginx -t 2>&1 | grep -v ssl_stapling | tail -2
 systemctl reload nginx
 echo_progress_done "app nginx configs regenerated"
+trap - ERR
+
+echo_success "Authelia installed (portal at /auth/, MFA required)"
+echo_info "SSO integrated with qBittorrent/ruTorrent/panel"
+echo_info "Re-enable 2FA: change one_factor to two_factor in configuration.yml"
