@@ -63,8 +63,6 @@ for user in ${users[@]}; do
             if ! grep -q '^WebUI\\AuthSubnetWhitelist=' "$QBT_CFG"; then
                 sed -i '/WebUI\\AuthSubnetWhitelistEnabled/a WebUI\\AuthSubnetWhitelist=127.0.0.1/32' "$QBT_CFG"
             fi
-            # Bind all interfaces so WG peers (Sonarr) can reach the API via key auth
-            sed -i 's/WebUI\\Address=127.0.0.1/WebUI\\Address=*/' "$QBT_CFG"
         fi
     fi
     systemctl enable -q --now qbittorrent@${user} 2>&1 | tee -a $log
