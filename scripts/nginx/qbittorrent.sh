@@ -20,7 +20,29 @@ DIN
 fi
 
 if [[ ! -f /etc/nginx/apps/qbittorrent.conf ]]; then
-    cat > /etc/nginx/apps/qbittorrent.conf << 'QBTN'
+    if [[ -f /install/.authelia.lock ]]; then
+        cat > /etc/nginx/apps/qbittorrent.conf << 'QBTN'
+location /qbt {
+    return 301 /qbittorrent/;
+}
+
+location /qbittorrent/ {
+    auth_request /_authz;
+    auth_request_set $authelia_user $upstream_http_remote_user;
+    auth_request_set $authelia_redirect $upstream_http_location;
+    error_page 401 = @authelia_redirect;
+
+    proxy_pass              http://$qbt_tenant.qbittorrent;
+    proxy_http_version      1.1;
+    proxy_set_header        X-Forwarded-Host        $http_host;
+    proxy_set_header        X-Forwarded-User        $authelia_user;
+    http2_push_preload on;
+    rewrite ^/qbittorrent/(.*) /$1 break;
+    proxy_cookie_path / "/qbittorrent/; Secure";
+}
+QBTN
+    else
+        cat > /etc/nginx/apps/qbittorrent.conf << 'QBTN'
 location /qbt {
     return 301 /qbittorrent/;
 }
@@ -35,21 +57,9 @@ location /qbittorrent/ {
     auth_basic_user_file /etc/htpasswd;
     rewrite ^/qbittorrent/(.*) /$1 break;
     proxy_cookie_path / "/qbittorrent/; Secure";
-
-    # The following directives effectively nullify Cross-site request forgery (CSRF)
-    # protection mechanism in qBittorrent, only use them when you encountered connection problems.
-    # You should consider disable "Enable Cross-site request forgery (CSRF) protection"
-    # setting in qBittorrent instead of using these directives to tamper the headers.
-    # The setting is located under "Options -> WebUI tab" in qBittorrent since v4.1.2.
-    #proxy_hide_header       Referer;
-    #proxy_hide_header       Origin;
-    #proxy_set_header        Referer                 '';
-    #proxy_set_header        Origin                  '';
-
-    # Not needed since qBittorrent v4.1.0
-    #add_header              X-Frame-Options         "SAMEORIGIN";
 }
 QBTN
+    fi
 fi
 
 for user in ${users[@]}; do
