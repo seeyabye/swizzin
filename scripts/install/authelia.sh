@@ -58,7 +58,7 @@ access_control:
   default_policy: deny
   rules:
     - domain: 'eu02.nanohosting.info'
-      policy: two_factor
+      policy: one_factor
 
 session:
   name: authelia_session
@@ -309,6 +309,6 @@ for u in "${qbt_users[@]}"; do
     rm -f "/home/${u}/.config/qBittorrent/qBittorrent.conf.bak-sso"
 done
 
-echo_success "Authelia installed (portal at /auth/, MFA required)"
+echo_success "Authelia installed (portal at /auth/, SSO active)"
 echo_info "SSO integrated with qBittorrent/ruTorrent/panel"
-echo_info "Re-enable 2FA: change one_factor to two_factor in configuration.yml"
+echo_info "2FA disabled by default (one_factor). To enable: configure SMTP notifier, change to two_factor, set up TOTP."
