@@ -197,7 +197,7 @@ cleanup_sso() {
         [[ -f /etc/nginx/apps/${app}.conf.bak-sso ]] && cp /etc/nginx/apps/${app}.conf.bak-sso /etc/nginx/apps/${app}.conf
     done
     for u in "${qbt_users[@]}"; do
-        QBT_CFG="/home/${u}/.config/QBittorrent/qBittorrent.conf"
+        QBT_CFG="/home/${u}/.config/qBittorrent/qBittorrent.conf"
         if [[ -f "${QBT_CFG}.bak-sso" ]]; then
             systemctl stop qbittorrent@${u} 2>/dev/null
             cp "${QBT_CFG}.bak-sso" "$QBT_CFG"
@@ -306,7 +306,7 @@ for app in qbittorrent rutorrent panel; do
     rm -f /etc/nginx/apps/${app}.conf.bak-sso
 done
 for u in "${qbt_users[@]}"; do
-    rm -f "/home/${u}/.config/QBittorrent/qBittorrent.conf.bak-sso"
+    rm -f "/home/${u}/.config/qBittorrent/qBittorrent.conf.bak-sso"
 done
 
 echo_success "Authelia installed (portal at /auth/, MFA required)"
