@@ -201,53 +201,65 @@ echo_progress_done "Authelia started"
 touch /install/.authelia.lock
 
 # Trap: remove lock if regeneration fails (rollback SSO signal)
-trap 'rm -f /install/.authelia.lock; echo_error "SSO integration failed, lock removed"' ERR
+trap 'ec=$?; rm -f /install/.authelia.lock; echo_error "SSO integration failed (exit $ec), lock removed"; exit $ec' ERR
 
 echo_progress_start "Regenerating app nginx configs for SSO"
-# Back up existing configs, generate new ones to temp, test, then swap
 regen_failed=0
 
+# Back up existing configs before modifying
+if [[ -f /etc/nginx/apps/qbittorrent.conf ]]; then cp /etc/nginx/apps/qbittorrent.conf /etc/nginx/apps/qbittorrent.conf.bak-sso; fi
+if [[ -f /etc/nginx/apps/rutorrent.conf ]]; then cp /etc/nginx/apps/rutorrent.conf /etc/nginx/apps/rutorrent.conf.bak-sso; fi
+if [[ -f /etc/nginx/apps/panel.conf ]]; then cp /etc/nginx/apps/panel.conf /etc/nginx/apps/panel.conf.bak-sso; fi
+
+# Restore all backups and abort
+restore_all_backups() {
+    for app in qbittorrent rutorrent panel; do
+        if [[ -f /etc/nginx/apps/${app}.conf.bak-sso ]]; then
+            cp /etc/nginx/apps/${app}.conf.bak-sso /etc/nginx/apps/${app}.conf
+        fi
+    done
+}
+
+# Generate new configs (errors logged, not suppressed)
 if [[ -f /install/.qbittorrent.lock ]] && [[ -f /etc/nginx/apps/qbittorrent.conf ]]; then
-    cp /etc/nginx/apps/qbittorrent.conf /etc/nginx/apps/qbittorrent.conf.bak-sso
     rm -f /etc/nginx/apps/qbittorrent.conf
     if ! bash /etc/swizzin/scripts/nginx/qbittorrent.sh >> ${log} 2>&1; then
         echo_error "Failed to regenerate qbittorrent nginx config"
-        cp /etc/nginx/apps/qbittorrent.conf.bak-sso /etc/nginx/apps/qbittorrent.conf 2>/dev/null
         regen_failed=1
     fi
 fi
 
 if [[ -f /install/.rutorrent.lock ]] && [[ -f /etc/nginx/apps/rutorrent.conf ]]; then
-    cp /etc/nginx/apps/rutorrent.conf /etc/nginx/apps/rutorrent.conf.bak-sso
     rm -f /etc/nginx/apps/rutorrent.conf
     if ! bash /etc/swizzin/scripts/nginx/rutorrent.sh >> ${log} 2>&1; then
         echo_error "Failed to regenerate rutorrent nginx config"
-        cp /etc/nginx/apps/rutorrent.conf.bak-sso /etc/nginx/apps/rutorrent.conf 2>/dev/null
         regen_failed=1
     fi
 fi
 
 if [[ -f /install/.panel.lock ]] && [[ -f /etc/nginx/apps/panel.conf ]]; then
-    cp /etc/nginx/apps/panel.conf /etc/nginx/apps/panel.conf.bak-sso
     rm -f /etc/nginx/apps/panel.conf
     if ! bash /etc/swizzin/scripts/nginx/panel.sh >> ${log} 2>&1; then
         echo_error "Failed to regenerate panel nginx config"
-        cp /etc/nginx/apps/panel.conf.bak-sso /etc/nginx/apps/panel.conf 2>/dev/null
         regen_failed=1
     fi
 fi
 
+# If any generator failed, restore ALL backups and abort
 if [[ $regen_failed -eq 1 ]]; then
-    echo_error "SSO config regeneration failed for one or more apps. Restored backups."
+    echo_error "SSO config regeneration failed. Restoring all backups."
+    restore_all_backups
     rm -f /install/.authelia.lock
     exit 1
 fi
 
-if ! nginx -t 2>&1 | grep -v ssl_stapling | tail -2; then
-    echo_error "nginx config test failed after SSO regeneration. Restoring backups."
-    for f in qbittorrent rutorrent panel; do
-        cp /etc/nginx/apps/${f}.conf.bak-sso /etc/nginx/apps/${f}.conf 2>/dev/null
-    done
+# Test nginx config (capture output, check exit code directly)
+nginx_output=$(nginx -t 2>&1)
+nginx_status=$?
+echo "$nginx_output" | grep -v ssl_stapling
+if [[ $nginx_status -ne 0 ]]; then
+    echo_error "nginx config test failed. Restoring all backups."
+    restore_all_backups
     rm -f /install/.authelia.lock
     exit 1
 fi
