@@ -108,8 +108,7 @@ for user in "${users[@]}"; do
         cat >> "${AUTHELIA_CONF_DIR}/users.yml" << USERENTRY
   ${user}:
     displayname: '${user}'
-    password:
-      hashed: '${hash}'
+    password: '${hash}'
     email: '${user}@eu02.nanohosting.info'
     groups:
       - ${groups}
