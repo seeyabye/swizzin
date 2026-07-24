@@ -201,7 +201,7 @@ echo_progress_done "Authelia started"
 touch /install/.authelia.lock
 
 # Trap: remove lock if regeneration fails (rollback SSO signal)
-trap 'ec=$?; rm -f /install/.authelia.lock; echo_error "SSO integration failed (exit $ec), lock removed"; exit $ec' ERR
+# SSO integration uses explicit error checks (no ERR trap)
 
 echo_progress_start "Regenerating app nginx configs for SSO"
 regen_failed=0
@@ -253,20 +253,19 @@ if [[ $regen_failed -eq 1 ]]; then
     exit 1
 fi
 
-# Test nginx config (capture output, check exit code directly)
-nginx_output=$(nginx -t 2>&1)
-nginx_status=$?
-echo "$nginx_output" | grep -v ssl_stapling
-if [[ $nginx_status -ne 0 ]]; then
+# Test nginx config (if-statement doesn't trigger ERR trap)
+if ! nginx_output=$(nginx -t 2>&1); then
+    echo "$nginx_output" | grep -v ssl_stapling
     echo_error "nginx config test failed. Restoring all backups."
     restore_all_backups
     rm -f /install/.authelia.lock
     exit 1
 fi
+echo "$nginx_output" | grep -v ssl_stapling
 
 systemctl reload nginx
 echo_progress_done "app nginx configs regenerated"
-trap - ERR
+# (no ERR trap to remove)
 
 echo_success "Authelia installed (portal at /auth/, MFA required)"
 echo_info "SSO integrated with qBittorrent/ruTorrent/panel"

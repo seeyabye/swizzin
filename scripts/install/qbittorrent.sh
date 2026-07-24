@@ -55,26 +55,19 @@ qbittorrent_service
 for user in ${users[@]}; do
     echo_progress_start "Enabling qbittorrent for $user"
     qbittorrent_user_config ${user}
-    systemctl enable -q --now qbittorrent@${user} 2>&1 | tee -a $log
-    echo_progress_done "Started qbt for $user"
-done
-# SSO hook: configure AuthSubnetWhitelist if Authelia is installed
-if [[ -f /install/.authelia.lock ]]; then
-    echo_progress_start "Configuring qBittorrent for SSO single-login"
-    for qbt_user in ${users[@]}; do
-        QBT_CFG="/home/${qbt_user}/.config/qBittorrent/qBittorrent.conf"
+    # SSO: configure AuthSubnetWhitelist if Authelia is installed (before start, no race)
+    if [[ -f /install/.authelia.lock ]]; then
+        QBT_CFG="/home/${user}/.config/qBittorrent/qBittorrent.conf"
         if [[ -f "$QBT_CFG" ]]; then
-            systemctl stop qbittorrent@${qbt_user} 2>/dev/null
             sed -i 's/WebUI\\AuthSubnetWhitelistEnabled=false/WebUI\\AuthSubnetWhitelistEnabled=true/' "$QBT_CFG"
             if ! grep -q '^WebUI\\AuthSubnetWhitelist=' "$QBT_CFG"; then
                 sed -i '/WebUI\\AuthSubnetWhitelistEnabled/a WebUI\\AuthSubnetWhitelist=127.0.0.1/32' "$QBT_CFG"
             fi
-            systemctl start qbittorrent@${qbt_user}
         fi
-    done
-    echo_progress_done "qBittorrent SSO configured"
-fi
-
+    fi
+    systemctl enable -q --now qbittorrent@${user} 2>&1 | tee -a $log
+    echo_progress_done "Started qbt for $user"
+done
 if [[ -f /install/.nginx.lock ]]; then
     echo_progress_start "Configuring nginx"
     bash /etc/swizzin/scripts/nginx/qbittorrent.sh
