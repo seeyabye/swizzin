@@ -9,6 +9,12 @@
 #     auth_request_set $authelia_user, map keyed on $authelia_user.
 #   - Without: auth_basic + map keyed on $remote_user.
 #
+# Workaround: qBitManage's documentation-viewer.js (v4.10) hardcodes the docs
+# fetch as fetch('/api/docs?...'), ignoring --base-url. Behind a base-url of
+# /qbitmanage that request hits the panel catch-all (location /) and 404s.
+# Intercept /api/docs and redirect to the base-url-prefixed path so it reaches
+# the user's own instance through the normal /qbitmanage/ auth + routing.
+#
 
 #shellcheck source=sources/functions/users
 . /etc/swizzin/sources/functions/users
@@ -42,9 +48,14 @@ fi
 } > /etc/nginx/conf.d/00-qbitmanage-map.conf
 
 # 2. server-level reverse proxy. Same per-user routing in both modes;
-# only the auth layer differs.
+# only the auth layer differs. Both branches also redirect /api/docs to
+# /qbitmanage/api/docs to work around the docs viewer base-url bug.
 if [[ -f /install/.authelia.lock ]]; then
     cat > /etc/nginx/apps/qbitmanage.conf <<'QBM_SSO'
+location = /api/docs {
+    return 302 /qbitmanage/api/docs$is_args$args;
+}
+
 location /qbitmanage {
     return 301 /qbitmanage/;
 }
@@ -66,6 +77,10 @@ location /qbitmanage/ {
 QBM_SSO
 else
     cat > /etc/nginx/apps/qbitmanage.conf <<'QBM_BASIC'
+location = /api/docs {
+    return 302 /qbitmanage/api/docs$is_args$args;
+}
+
 location /qbitmanage {
     return 301 /qbitmanage/;
 }
