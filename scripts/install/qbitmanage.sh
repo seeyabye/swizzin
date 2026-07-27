@@ -6,6 +6,9 @@
 # Multi-user: one qbitmanage@<user> instance per qBittorrent user. nginx routes
 # /qbitmanage/ to the authenticated caller's own instance via a $remote_user map.
 #
+# Per-user: pass a username as $1 to install for a single user only (used by
+# `box adduser`). With no argument, installs/configures all users (used by
+# `box install qbitmanage`).
 
 #shellcheck source=sources/functions/utils
 . /etc/swizzin/sources/functions/utils
@@ -15,23 +18,36 @@
 QBM_VERSION="4.10.0"
 QBM_BIN="/usr/local/bin/qbit-manage"
 
-echo_progress_start "Downloading qBitManage v${QBM_VERSION}"
-case "$(_os_arch)" in
-    "amd64") qbm_arch="linux-amd64" ;;
-    "arm64") qbm_arch="linux-arm64" ;;
-    *) echo_error "qBitManage does not support $(_os_arch)"; exit 1 ;;
-esac
-wget -O "/tmp/qbit-manage" "https://github.com/StuffAnThings/qbit_manage/releases/download/v${QBM_VERSION}/qbit-manage-${qbm_arch}" >> ${log} 2>&1 || {
-    echo_error "Failed to download qBitManage binary"
-    exit 1
-}
-chmod 755 "/tmp/qbit-manage"
-mv "/tmp/qbit-manage" "${QBM_BIN}"
-chown root:root "${QBM_BIN}"
-echo_progress_done "qBitManage downloaded (shared binary at ${QBM_BIN})"
+# Target user(s): $1 = single user (box adduser), else all users (box install)
+if [[ -n "${1:-}" ]]; then
+    target_users=("$1")
+else
+    target_users=($(_get_user_list))
+fi
 
-# Migrate: remove legacy single-user qbitmanage.service if present
-if [[ -f /etc/systemd/system/qbitmanage.service ]]; then
+# --- Global setup (shared binary + templated service) ---
+# On a full install (no $1) always (re)download the binary to refresh it; on a
+# per-user install (box adduser) only download if the binary is missing (first
+# ever), so adduser doesn't re-fetch on every new user.
+if [[ -z "${1:-}" ]] || [[ ! -f "${QBM_BIN}" ]]; then
+    echo_progress_start "Downloading qBitManage v${QBM_VERSION}"
+    case "$(_os_arch)" in
+        "amd64") qbm_arch="linux-amd64" ;;
+        "arm64") qbm_arch="linux-arm64" ;;
+        *) echo_error "qBitManage does not support $(_os_arch)"; exit 1 ;;
+    esac
+    wget -O "/tmp/qbit-manage" "https://github.com/StuffAnThings/qbit_manage/releases/download/v${QBM_VERSION}/qbit-manage-${qbm_arch}" >> ${log} 2>&1 || {
+        echo_error "Failed to download qBitManage binary"
+        exit 1
+    }
+    chmod 755 "/tmp/qbit-manage"
+    mv "/tmp/qbit-manage" "${QBM_BIN}"
+    chown root:root "${QBM_BIN}"
+    echo_progress_done "qBitManage downloaded (shared binary at ${QBM_BIN})"
+fi
+
+# Migrate legacy single-user qbitmanage.service (full install only)
+if [[ -z "${1:-}" ]] && [[ -f /etc/systemd/system/qbitmanage.service ]]; then
     echo_progress_start "Migrating legacy single-user qbitmanage.service to per-user template"
     systemctl stop -q qbitmanage.service 2>/dev/null
     systemctl disable -q qbitmanage.service 2>/dev/null
@@ -40,8 +56,10 @@ if [[ -f /etc/systemd/system/qbitmanage.service ]]; then
     echo_progress_done "legacy service removed"
 fi
 
-echo_progress_start "Creating qbitmanage@ templated systemd service"
-cat > /etc/systemd/system/qbitmanage@.service <<'QBMUNIT'
+# (Re)create the templated service on full install, or if missing
+if [[ -z "${1:-}" ]] || [[ ! -f /etc/systemd/system/qbitmanage@.service ]]; then
+    echo_progress_start "Creating qbitmanage@ templated systemd service"
+    cat > /etc/systemd/system/qbitmanage@.service <<'QBMUNIT'
 [Unit]
 Description=qBitManage - qBittorrent automation for %i
 After=network-online.target qbittorrent@%i.service
@@ -62,13 +80,14 @@ UMask=0077
 [Install]
 WantedBy=multi-user.target
 QBMUNIT
-systemctl daemon-reload
-echo_progress_done "templated service created"
+    systemctl daemon-reload
+    echo_progress_done "templated service created"
+fi
 
-echo_progress_start "Configuring per-user qBitManage instances"
-users=($(_get_user_list))
+# --- Per-user configuration ---
+echo_progress_start "Configuring qBitManage instance(s)"
 installed=0
-for username in "${users[@]}"; do
+for username in "${target_users[@]}"; do
     qbt_conf="/home/${username}/.config/qBittorrent/qBittorrent.conf"
     qbt_port=$(grep 'WebUI\\Port' "${qbt_conf}" 2>/dev/null | head -1 | cut -d= -f2)
     if [[ -z "$qbt_port" ]]; then
@@ -80,7 +99,7 @@ for username in "${users[@]}"; do
     env_file="${qbm_dir}/qbitmanage.env"
     mkdir -p "${qbm_dir}"
 
-    # Allocate or preserve web-ui port
+    # Preserve an existing web-ui port, else allocate one
     if [[ -f "${env_file}" ]] && grep -q '^QBM_PORT=' "${env_file}"; then
         qbm_port=$(grep '^QBM_PORT=' "${env_file}" | cut -d= -f2)
     else
@@ -143,8 +162,9 @@ QBMENV
     echo_info "  ${username}: qbt=${qbt_port} web=${qbm_port}"
     installed=$((installed+1))
 done
-echo_progress_done "configured ${installed} per-user instance(s)"
+echo_progress_done "configured ${installed} instance(s)"
 
+# --- nginx (regenerates the per-user port map, includes newly added users) ---
 echo_progress_start "Configuring nginx"
 bash /etc/swizzin/scripts/nginx/qbitmanage.sh
 echo_progress_done "nginx configured"
