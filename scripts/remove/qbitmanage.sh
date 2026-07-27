@@ -10,6 +10,8 @@
 # With no argument, removes qBitManage entirely (all users + shared binary +
 # template + nginx configs + lock).
 
+#shellcheck source=sources/functions/utils
+. /etc/swizzin/sources/functions/utils
 #shellcheck source=sources/functions/users
 . /etc/swizzin/sources/functions/users
 
