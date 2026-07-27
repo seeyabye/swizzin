@@ -54,7 +54,7 @@ Group=%i
 WorkingDirectory=/home/%i/.config/qbitmanage
 Environment=QBIT_USER=%i
 EnvironmentFile=/home/%i/.config/qbitmanage/qbitmanage.env
-ExecStart=/usr/local/bin/qbit-manage --config-file config.yml --schedule 1440 --web-server --host 127.0.0.1 --port ${QBM_PORT} --base-url /qbitmanage
+ExecStart=/usr/local/bin/qbit-manage --config-file config.yml --schedule 60 --web-server --host 127.0.0.1 --port ${QBM_PORT} --base-url /qbitmanage
 Restart=on-failure
 RestartSec=5
 UMask=0077
