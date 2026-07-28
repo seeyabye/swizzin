@@ -104,6 +104,8 @@ Box functions:
     -   Usage: `box rmgrsec`
 -   rtx - starts the r(u)Torrent extras management interface (`rtx` alone will also do)
     -   Usage: `box rtx` or `rtx`
+-   authelia-user - manage Authelia SSO users (add, password, remove, list, reset-totp). Requires Authelia to be installed.
+    -   Usage: `box authelia-user add bob` / `box authelia-user password bob` / `box authelia-user remove bob` / `box authelia-user list` / `box authelia-user reset-totp bob`
 
 
 ## Contributing

@@ -207,6 +207,7 @@ function _help() {
     echo -e "Usage:\t$(basename $0)"
     echo -e "\t$(basename $0) [ install | remove | upgrade ] ${bold}pkg1${normal} [ pkg2 ... ]"
     echo -e "\t$(basename $0) [ adduser | deluser | chpasswd ] ${bold}username${normal} [ password ]"
+    echo -e "\t$(basename $0) authelia-user ${bold}subcommand${normal} [options]"
     echo -e "\t$(basename $0) [ list | update ]"
     echo
     echo -e "Note: Only install and remove functions accept package arguments. List and update must be run without modifiers\n" | fmt --goal=66 --tagged-paragraph
@@ -234,6 +235,10 @@ function _help() {
     printf "${sgformat}" "chpasswd"
     echo -e "The chpasswd function requires a single user to be specified, their password will be changed" | fmt --goal=50 | sed -e "2,\$s/^/$spacing/"
     echo -e "               Example: box chpasswd forgetfulfriend" | fmt --goal=50 | sed -e "2,\$s/^/$spacing/"
+    echo
+    printf "${sgformat}" "authelia-user"
+    echo -e "Manage Authelia SSO users when Authelia is installed (add, password, remove, list, reset-totp)" | fmt --goal=50 | sed -e "2,\$s/^/$spacing/"
+    echo -e "               Example: box authelia-user add bob" | fmt --goal=50 | sed -e "2,\$s/^/$spacing/"
     echo
     printf "${sgformat}" "update"
     echo -e "The update command will update your local swizzin repository to the latest version and run important update scripts" | fmt --goal=50 | sed -e "2,\$s/^/$spacing/"
@@ -633,6 +638,17 @@ case "$1" in
             exit 1
         fi
         _chpasswd "$@"
+        ;;
+    "authelia-user")
+        if [[ -z $2 ]]; then
+            echo_error "You must specify a subcommand.\nCorrect usage: box authelia-user <add|password|remove|list|reset-totp> [options]"
+            exit 1
+        fi
+        if [[ ! -f /install/.authelia.lock ]]; then
+            echo_error "Authelia is not installed. Install it first with: box install authelia"
+            exit 1
+        fi
+        exec /usr/local/bin/swizzin/authelia-user "${@:2}"
         ;;
     "rmgrsec")
         _nukeovh

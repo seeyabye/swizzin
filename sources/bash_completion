@@ -12,7 +12,7 @@ _command_complete() {
 
     case ${COMP_CWORD} in
         1)
-            mapfile -t COMPREPLY < <(compgen -W "install remove adduser deluser chpasswd update upgrade rtx rmgrsec list help" -- "${cur}")
+            mapfile -t COMPREPLY < <(compgen -W "install remove adduser deluser chpasswd authelia-user update upgrade rtx rmgrsec list help" -- "${cur}")
             ;;
         *)
             case ${sub_cmd} in
@@ -24,6 +24,11 @@ _command_complete() {
                     ;;
                 upgrade)
                     mapfile -t COMPREPLY < <(compgen -W "$(printf "%s " "${upgrade_array[@]%.*}")" -- "${cur}")
+                    ;;
+                authelia-user)
+                    if [[ ${COMP_CWORD} -eq 2 ]]; then
+                        mapfile -t COMPREPLY < <(compgen -W "add password remove list reset-totp" -- "${cur}")
+                    fi
                     ;;
                 *) ;;
             esac

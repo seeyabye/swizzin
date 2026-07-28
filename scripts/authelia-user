@@ -1,0 +1,291 @@
+#!/usr/bin/env python3
+"""Safely manage users in Authelia's file authentication backend."""
+
+import argparse
+import fcntl
+import getpass
+import os
+from pathlib import Path
+import re
+import subprocess
+import sys
+import tempfile
+
+USERS_FILE = Path(os.environ.get("AUTHELIA_USERS_FILE", "/etc/authelia/users.yml"))
+CONFIG_FILE = Path(os.environ.get("AUTHELIA_CONFIG_FILE", "/etc/authelia/configuration.yml"))
+AUTHELIA_BIN = os.environ.get("AUTHELIA_BIN", "/usr/local/bin/authelia")
+SYSTEMCTL_BIN = os.environ.get("AUTHELIA_SYSTEMCTL_BIN", "systemctl")
+SERVICE = os.environ.get("AUTHELIA_SERVICE", "authelia.service")
+USERNAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,99}$")
+HEADER_RE = re.compile(r"^  ([A-Za-z0-9][A-Za-z0-9_.-]{0,99}):\s*$")
+
+
+class UserError(Exception):
+    pass
+
+
+def run(command, *, input_text=None):
+    return subprocess.run(command, input=input_text, text=True, capture_output=True)
+
+
+def require_installation():
+    if os.geteuid() != 0 and os.environ.get("AUTHELIA_ALLOW_NON_ROOT") != "1":
+        raise UserError("this command must be run as root")
+    if not USERS_FILE.is_file():
+        raise UserError(f"Authelia user database not found: {USERS_FILE}")
+    if not CONFIG_FILE.is_file():
+        raise UserError(f"Authelia configuration not found: {CONFIG_FILE}")
+
+
+def validate_username(username):
+    if not USERNAME_RE.fullmatch(username):
+        raise UserError("username must start with a letter or digit and contain only letters, digits, '.', '_' or '-'")
+
+
+def yaml_quote(value):
+    if "\n" in value or "\r" in value or "\0" in value:
+        raise UserError("values may not contain control characters")
+    return "'" + value.replace("'", "''") + "'"
+
+
+def user_blocks(text):
+    lines = text.splitlines(keepends=True)
+    headers = []
+    offset = 0
+    for line in lines:
+        match = HEADER_RE.fullmatch(line.rstrip("\r\n"))
+        if match:
+            headers.append((match.group(1), offset))
+        offset += len(line)
+    return {
+        name: (start, headers[index + 1][1] if index + 1 < len(headers) else len(text))
+        for index, (name, start) in enumerate(headers)
+    }
+
+
+def field(block, name):
+    match = re.search(rf"^    {re.escape(name)}:\s*'((?:''|[^'])*)'\s*$", block, re.MULTILINE)
+    return match.group(1).replace("''", "'") if match else ""
+
+
+def groups(block):
+    match = re.search(r"^    groups:\s*$((?:\n      - .*)*)", block, re.MULTILINE)
+    return re.findall(r"^      - (.+?)\s*$", match.group(1), re.MULTILINE) if match else []
+
+
+def hash_password(password):
+    if not password:
+        raise UserError("password may not be empty")
+    result = run([AUTHELIA_BIN, "crypto", "hash", "generate", "argon2", "--password", password, "--no-confirm"])
+    if result.returncode:
+        raise UserError("password hashing failed: " + (result.stderr.strip() or result.stdout.strip()))
+    match = re.search(r"^Digest:\s*(\S+)\s*$", result.stdout, re.MULTILINE)
+    if not match:
+        raise UserError("Authelia did not return a password digest")
+    return match.group(1)
+
+
+def read_password(stdin=False):
+    if stdin:
+        password = sys.stdin.readline().rstrip("\r\n")
+    else:
+        password = getpass.getpass("Password: ")
+        if password != getpass.getpass("Confirm password: "):
+            raise UserError("passwords do not match")
+    if not password:
+        raise UserError("password may not be empty")
+    return password
+
+
+def default_email(username):
+    try:
+        config = CONFIG_FILE.read_text()
+        match = re.search(r"^\s*issuer:\s*['\"]?([^'\"#\s]+)", config, re.MULTILINE)
+        if match:
+            return f"{username}@{match.group(1)}"
+    except OSError:
+        pass
+    return ""
+
+
+def atomic_write(text):
+    stat = USERS_FILE.stat()
+    fd, temporary = tempfile.mkstemp(prefix=USERS_FILE.name + ".", dir=USERS_FILE.parent)
+    try:
+        with os.fdopen(fd, "w") as handle:
+            handle.write(text)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.chmod(temporary, stat.st_mode)
+        os.chown(temporary, stat.st_uid, stat.st_gid)
+        os.replace(temporary, USERS_FILE)
+    finally:
+        if os.path.exists(temporary):
+            os.unlink(temporary)
+
+
+def validate_and_restart(old_text, new_text):
+    atomic_write(new_text)
+    validation = run([AUTHELIA_BIN, "validate-config", "--config", str(CONFIG_FILE)])
+    if validation.returncode:
+        atomic_write(old_text)
+        detail = validation.stderr.strip() or validation.stdout.strip()
+        raise UserError("configuration validation failed; users.yml was restored" + (f": {detail}" if detail else ""))
+    if os.environ.get("AUTHELIA_SKIP_RESTART") == "1":
+        return
+    restarted = run([SYSTEMCTL_BIN, "restart", SERVICE])
+    if restarted.returncode:
+        atomic_write(old_text)
+        run([SYSTEMCTL_BIN, "restart", SERVICE])
+        detail = restarted.stderr.strip() or restarted.stdout.strip()
+        raise UserError("Authelia restart failed; users.yml was restored" + (f": {detail}" if detail else ""))
+
+
+def mutate(mutator):
+    lock_path = USERS_FILE.with_suffix(USERS_FILE.suffix + ".lock")
+    with lock_path.open("a") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        old_text = USERS_FILE.read_text()
+        if not old_text.startswith("users:"):
+            raise UserError(f"unexpected file format in {USERS_FILE}")
+        new_text = mutator(old_text)
+        validate_and_restart(old_text, new_text)
+
+
+def add_user(args):
+    validate_username(args.username)
+    email = args.email
+    if email is None:
+        suggested = default_email(args.username)
+        if not sys.stdin.isatty():
+            raise UserError("--email is required when not running interactively")
+        entered = input(f"Email [{suggested}]: ").strip()
+        email = entered or suggested
+    if not email or "@" not in email:
+        raise UserError("a valid email address is required")
+    digest = hash_password(read_password(args.password_stdin))
+
+    def change(text):
+        if args.username in user_blocks(text):
+            raise UserError(f"user '{args.username}' already exists")
+        prefix = text.rstrip() + "\n"
+        return prefix + (
+            f"  {args.username}:\n"
+            f"    displayname: {yaml_quote(args.display_name or args.username)}\n"
+            f"    password: {yaml_quote(digest)}\n"
+            f"    email: {yaml_quote(email)}\n"
+            f"    groups:\n"
+            f"      - {args.group}\n"
+        )
+
+    mutate(change)
+    print(f"Added Authelia user '{args.username}' and restarted Authelia.")
+
+
+def change_password(args):
+    validate_username(args.username)
+    digest = hash_password(read_password(args.password_stdin))
+
+    def change(text):
+        blocks = user_blocks(text)
+        if args.username not in blocks:
+            raise UserError(f"user '{args.username}' does not exist")
+        start, end = blocks[args.username]
+        block = text[start:end]
+        updated, count = re.subn(r"^    password:.*$", f"    password: {yaml_quote(digest)}", block, count=1, flags=re.MULTILINE)
+        if count != 1:
+            raise UserError(f"user '{args.username}' has no password field")
+        return text[:start] + updated + text[end:]
+
+    mutate(change)
+    print(f"Changed password for '{args.username}' and restarted Authelia.")
+
+
+def remove_user(args):
+    validate_username(args.username)
+    if not args.yes:
+        if not sys.stdin.isatty():
+            raise UserError("use --yes when not running interactively")
+        if input(f"Remove Authelia user '{args.username}'? [y/N]: ").strip().lower() not in ("y", "yes"):
+            print("Cancelled.")
+            return
+
+    def change(text):
+        blocks = user_blocks(text)
+        if args.username not in blocks:
+            raise UserError(f"user '{args.username}' does not exist")
+        start, end = blocks[args.username]
+        return text[:start] + text[end:]
+
+    mutate(change)
+    print(f"Removed Authelia user '{args.username}' and restarted Authelia.")
+    print("Any existing MFA registrations were left intact; use reset-totp before reusing this username.")
+
+
+def list_users(_args):
+    text = USERS_FILE.read_text()
+    blocks = user_blocks(text)
+    if not blocks:
+        print("No Authelia users configured.")
+        return
+    print(f"{'USERNAME':<24} {'EMAIL':<40} GROUPS")
+    for username, (start, end) in blocks.items():
+        block = text[start:end]
+        print(f"{username:<24} {field(block, 'email'):<40} {','.join(groups(block))}")
+
+
+def reset_totp(args):
+    validate_username(args.username)
+    if args.username not in user_blocks(USERS_FILE.read_text()):
+        raise UserError(f"user '{args.username}' does not exist")
+    result = run([AUTHELIA_BIN, "storage", "user", "totp", "delete", args.username, "--config", str(CONFIG_FILE)])
+    if result.returncode:
+        detail = result.stderr.strip() or result.stdout.strip()
+        raise UserError("TOTP reset failed" + (f": {detail}" if detail else ""))
+    print(f"Reset TOTP for '{args.username}'. They can enroll a new authenticator when two-factor policy is enabled.")
+
+
+def parser():
+    root = argparse.ArgumentParser(prog="box authelia-user", description="Manage Authelia file-backend users safely.")
+    commands = root.add_subparsers(dest="command", required=True)
+
+    add = commands.add_parser("add", help="add a user")
+    add.add_argument("username")
+    add.add_argument("--email")
+    add.add_argument("--display-name")
+    add.add_argument("--group", choices=("users", "admins"), default="users")
+    add.add_argument("--password-stdin", action="store_true", help="read one password line from standard input")
+    add.set_defaults(handler=add_user)
+
+    password = commands.add_parser("password", help="change a password")
+    password.add_argument("username")
+    password.add_argument("--password-stdin", action="store_true", help="read one password line from standard input")
+    password.set_defaults(handler=change_password)
+
+    remove = commands.add_parser("remove", help="remove a user")
+    remove.add_argument("username")
+    remove.add_argument("--yes", action="store_true", help="do not prompt for confirmation")
+    remove.set_defaults(handler=remove_user)
+
+    listing = commands.add_parser("list", help="list users")
+    listing.set_defaults(handler=list_users)
+
+    totp = commands.add_parser("reset-totp", help="delete a user's TOTP registration")
+    totp.add_argument("username")
+    totp.set_defaults(handler=reset_totp)
+    return root
+
+
+def main():
+    try:
+        require_installation()
+        args = parser().parse_args()
+        args.handler(args)
+    except (UserError, OSError) as error:
+        print(f"Error: {error}", file=sys.stderr)
+        return 1
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
