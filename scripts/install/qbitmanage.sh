@@ -72,7 +72,10 @@ Group=%i
 WorkingDirectory=/home/%i/.config/qbitmanage
 Environment=QBIT_USER=%i
 EnvironmentFile=/home/%i/.config/qbitmanage/qbitmanage.env
-ExecStart=/usr/local/bin/qbit-manage --config-file config.yml --schedule 60 --web-server --host 127.0.0.1 --port ${QBM_PORT} --base-url /qbitmanage
+# Pin the config home (-cd / QBT_CONFIG_DIR) to the single folder so qBitManage's
+# own default (~/.config/qbit-manage) never creates a second location for
+# logs/.backups/web-configs. cwd/config-file stay relative for compat.
+ExecStart=/usr/local/bin/qbit-manage --config-dir /home/%i/.config/qbitmanage --config-file config.yml --schedule 60 --web-server --host 127.0.0.1 --port ${QBM_PORT} --base-url /qbitmanage
 Restart=on-failure
 RestartSec=5
 UMask=0077
@@ -99,6 +102,21 @@ for username in "${target_users[@]}"; do
     env_file="${qbm_dir}/qbitmanage.env"
     mkdir -p "${qbm_dir}"
 
+    # Migrate a legacy hyphenated config home (~/.config/qbit-manage) left by
+    # older installs (qBitManage defaults to ~/.config/qbit-manage; this fork
+    # pins everything to the single folder via QBT_CONFIG_DIR/--config-dir).
+    # Pull any real content over without clobbering, then remove the
+    # hyphenated path (file or symlink). Fresh installs never hit this.
+    legacy_dir="/home/${username}/.config/qbit-manage"
+    if [[ -e "${legacy_dir}" ]] || [[ -L "${legacy_dir}" ]]; then
+        if [[ ! -L "${legacy_dir}" ]]; then
+            [[ -f "${legacy_dir}/config.yml" && ! -f "${qbm_dir}/config.yml" ]] && mv "${legacy_dir}/config.yml" "${qbm_dir}/config.yml"
+            [[ -d "${legacy_dir}/logs" && ! -d "${qbm_dir}/logs" ]] && mv "${legacy_dir}/logs" "${qbm_dir}/logs"
+            [[ -d "${legacy_dir}/.backups" && ! -d "${qbm_dir}/.backups" ]] && mv "${legacy_dir}/.backups" "${qbm_dir}/.backups"
+        fi
+        rm -rf "${legacy_dir}"
+    fi
+
     # Preserve an existing web-ui port, else allocate one
     if [[ -f "${env_file}" ]] && grep -q '^QBM_PORT=' "${env_file}"; then
         qbm_port=$(grep '^QBM_PORT=' "${env_file}" | cut -d= -f2)
@@ -106,6 +124,10 @@ for username in "${target_users[@]}"; do
         qbm_port="$(port 11700 11799)"
     fi
 
+    # Write config.yml only if missing (write-once): a fresh install gets the
+    # default template; a reinstall preserves the user's per-tracker config
+    # (including one migrated from a legacy hyphenated home above).
+    if [[ ! -f "${qbm_dir}/config.yml" ]]; then
     cat > "${qbm_dir}/config.yml" << QBMCFG
 qbt:
   host: "127.0.0.1:${qbt_port}"
@@ -144,12 +166,14 @@ commands:
   skip_qb_version_check: False
   skip_cleanup: False
 QBMCFG
+    fi
     chown "${username}:${username}" "${qbm_dir}/config.yml"
     chmod 600 "${qbm_dir}/config.yml"
 
     cat > "${env_file}" << QBMENV
 QBIT_PASS=${password}
 QBM_PORT=${qbm_port}
+QBT_CONFIG_DIR=${qbm_dir}
 QBMENV
     chown "${username}:${username}" "${env_file}"
     chmod 600 "${env_file}"

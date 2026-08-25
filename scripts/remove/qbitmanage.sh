@@ -39,6 +39,8 @@ echo_progress_done "qBitManage stopped"
 echo_progress_start "Removing qBitManage files"
 for username in "${target_users[@]}"; do
     rm -rf "/home/${username}/.config/qbitmanage"
+    # legacy hyphenated home / alias from older installs
+    rm -rf "/home/${username}/.config/qbit-manage"
     rm -f "/home/${username}/bin/qbit-manage"
 done
 
